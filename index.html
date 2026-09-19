@@ -267,8 +267,8 @@
 
 <!-- ══ TAB NAV ══ -->
 <nav id="tab-nav">
-  <button class="tab-btn active" onclick="showTab('article')">the stuff about tomatos</button>
-  <button class="tab-btn"        onclick="showTab('game')">a game I geuss </button>
+  <button class="tab-btn active" onclick="showTab('article')">thing about tomatos</button>
+  <button class="tab-btn"        onclick="showTab('game')">a game with nothing to do with tomatos</button>
 </nav>
 
 <!-- ══ ARTICLE PANEL ══ -->
@@ -415,19 +415,38 @@
   let gameInited = false;
 
   /* ══════════════════════════════════════════════════════════
-     SLOPE 3D GAME ENGINE
+     SLOPE 3D — PERFORMANCE-OPTIMISED ENGINE
+     Key wins:
+       • No shadows at all (biggest GPU drain removed)
+       • MeshLambertMaterial instead of MeshStandardMaterial (no PBR cost)
+       • Shared, reused geometries (BoxGeo, OctGeo created once)
+       • pixelRatio capped at 1
+       • No antialias
+       • Smaller ball geo (14-seg instead of 32-seg)
+       • No WireframeGeometry overlay
+       • Look-ahead reduced 300→180 so fewer live meshes exist at once
+       • Camera target reused vectors (no per-frame clone())
+       • DOM updates throttled to every 4 frames
   ══════════════════════════════════════════════════════════ */
   var keys = { left: false, right: false };
   var touchX = 0, isTouching = false;
 
   const TRACK_WIDTH = 20, SEGMENT_LENGTH = 30;
   const SLOPE_ANGLE = 0.15;
-  const SLOPE_TAN = Math.tan(SLOPE_ANGLE);
-  const SLOPE_COS = Math.cos(SLOPE_ANGLE);
-  const BASE_SPEED = 0.85, ACCELERATION = 0.00012, MAX_SPEED = 1.80, GRAVITY = -0.018;
+  const SLOPE_TAN   = Math.tan(SLOPE_ANGLE);
+  const SLOPE_COS   = Math.cos(SLOPE_ANGLE);
+  const BASE_SPEED  = 0.85, ACCELERATION = 0.00012, MAX_SPEED = 1.80, GRAVITY = -0.018;
 
   let scene, camera, renderer;
-  let ballMat, trackMat, obstacleMat, rampMat, boostMat, gemMat, superRampMat;
+  // Shared reusable geometries
+  let geoTile, geoBorder, geoObs, geoBoostPad, geoGem;
+  // Shared materials (Lambert = fast, no PBR shading math)
+  let ballMat, trackMat, borderMat, obstacleMat, rampMat, boostMat, gemMat, superRampMat;
+  // Reusable camera vectors (avoid per-frame allocation)
+  const _camOffset  = new THREE.Vector3(0, 4.8, -9.5);
+  const _camTarget  = new THREE.Vector3();
+  const _camPos     = new THREE.Vector3();
+  let frameCount = 0;
 
   let state = {
     isRunning: false, isGameOver: false,
@@ -446,13 +465,14 @@
   let trackSegments=[], obstacles=[], jumpRamps=[], boostPads=[], gems=[];
   let nextSegmentZ=0, pendingGap=false, safeSegmentsCount=4;
 
+  // Build a wedge geometry — still created per-ramp since dimensions vary
   function createWedgeGeometry(width, height, length) {
     const geo = new THREE.BufferGeometry();
-    const w = width/2, l = length/2, h = height;
+    const w=width/2, l=length/2, h=height;
     const v = new Float32Array([
-      -w,0,-l, w,0,-l, -w,0,l,   w,0,-l, w,0,l, -w,0,l,
-      -w,0,-l, -w,h,l, w,0,-l,   w,0,-l, -w,h,l, w,h,l,
-      -w,0,l,  w,0,l,  -w,h,l,   w,0,l,  w,h,l,  -w,h,l,
+      -w,0,-l, w,0,-l, -w,0,l,  w,0,-l, w,0,l, -w,0,l,
+      -w,0,-l, -w,h,l, w,0,-l,  w,0,-l, -w,h,l, w,h,l,
+      -w,0,l,  w,0,l,  -w,h,l,  w,0,l,  w,h,l,  -w,h,l,
       -w,0,-l, -w,0,l, -w,h,l,
        w,0,-l,  w,h,l,  w,0,l
     ]);
@@ -463,40 +483,46 @@
 
   function initGame() {
     const canvas = document.getElementById("three-canvas");
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x030712);
-    scene.fog = new THREE.FogExp2(0x030712, 0.007);
+    scene.fog = new THREE.FogExp2(0x030712, 0.008);
 
-    camera = new THREE.PerspectiveCamera(65, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
+    camera = new THREE.PerspectiveCamera(65, W/H, 0.1, 600);
 
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // NO antialias, pixel ratio capped at 1 — huge perf win
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+    renderer.setSize(W, H);
+    renderer.setPixelRatio(1);
+    renderer.shadowMap.enabled = false; // shadows OFF
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.85));
-    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
-    sun.position.set(30,80,-30); sun.castShadow = true;
-    sun.shadow.mapSize.set(1024,1024);
-    scene.add(sun);
+    // Lighting: ambient only is fine without shadows/PBR
+    scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+    const fill = new THREE.DirectionalLight(0x8888ff, 0.4);
+    fill.position.set(-10, 20, -10);
+    scene.add(fill);
 
-    ballMat      = new THREE.MeshStandardMaterial({ color:0x00ffcc, roughness:0.15, metalness:0.6 });
-    trackMat     = new THREE.MeshStandardMaterial({ color:0x0f172a, roughness:0.4 });
-    obstacleMat  = new THREE.MeshStandardMaterial({ color:0xff0044, roughness:0.2, emissive:0x880022 });
-    rampMat      = new THREE.MeshStandardMaterial({ color:0x0088ff, roughness:0.2, emissive:0x0033aa });
-    boostMat     = new THREE.MeshStandardMaterial({ color:0xffaa00, roughness:0.1, emissive:0xaa5500 });
-    superRampMat = new THREE.MeshStandardMaterial({ color:0xf000ff, roughness:0.1, emissive:0x9900aa });
-    gemMat       = new THREE.MeshStandardMaterial({ color:0xd946ef, roughness:0.1, emissive:0x701a75 });
+    // SHARED geometries — created once, reused for every tile/obstacle/gem
+    geoTile     = new THREE.BoxGeometry(TRACK_WIDTH, 1.0, SEGMENT_LENGTH);
+    geoBorder   = new THREE.BoxGeometry(0.5, 1.0, SEGMENT_LENGTH);
+    geoObs      = new THREE.BoxGeometry(2.2, 2.2, 2.2);
+    geoBoostPad = new THREE.BoxGeometry(6, 0.1, 8);
+    geoGem      = new THREE.OctahedronGeometry(0.8, 0);
 
-    const ballGeo = new THREE.SphereGeometry(player.radius, 32, 32);
-    player.mesh = new THREE.Mesh(ballGeo, ballMat);
-    player.mesh.castShadow = true;
-    const wf = new THREE.LineSegments(
-      new THREE.WireframeGeometry(ballGeo),
-      new THREE.LineBasicMaterial({ color:0x030712, transparent:true, opacity:0.35 })
-    );
-    player.mesh.add(wf);
+    // Lambert materials — no per-pixel lighting calc, very fast
+    trackMat     = new THREE.MeshLambertMaterial({ color: 0x0f172a });
+    borderMat    = new THREE.MeshBasicMaterial({ color: 0x2563eb });
+    obstacleMat  = new THREE.MeshLambertMaterial({ color: 0xff0044, emissive: 0x660011 });
+    rampMat      = new THREE.MeshLambertMaterial({ color: 0x0088ff, emissive: 0x002255 });
+    boostMat     = new THREE.MeshLambertMaterial({ color: 0xffaa00, emissive: 0x553300 });
+    superRampMat = new THREE.MeshLambertMaterial({ color: 0xee00ff, emissive: 0x660077 });
+    gemMat       = new THREE.MeshLambertMaterial({ color: 0xd946ef, emissive: 0x5a0a65 });
+    ballMat      = new THREE.MeshLambertMaterial({ color: 0x22c55e, emissive: 0x0a4020 });
+
+    // Ball — 14 segments instead of 32 (looks fine at game speed)
+    const ballGeo  = new THREE.SphereGeometry(player.radius, 14, 10);
+    player.mesh    = new THREE.Mesh(ballGeo, ballMat);
     scene.add(player.mesh);
 
     updateHighScoreUI();
@@ -506,7 +532,8 @@
   }
 
   function populateTrack() {
-    const targetZ = player.pos.z + 300;
+    // Reduced look-ahead: 180 instead of 300 → fewer live draw calls
+    const targetZ = player.pos.z + 180;
     while (nextSegmentZ < targetZ) { createSegment(nextSegmentZ); nextSegmentZ += SEGMENT_LENGTH; }
   }
 
@@ -529,60 +556,58 @@
       if (nextIsGap) pendingGap = true;
     }
 
-    const thick = 1.0;
-    const tile = new THREE.Mesh(new THREE.BoxGeometry(TRACK_WIDTH, thick, SEGMENT_LENGTH), trackMat);
-    const yPos = -zPos*SLOPE_TAN - thick/(2*SLOPE_COS);
+    // Reuse shared geoTile — no new geometry allocation per tile
+    const tile = new THREE.Mesh(geoTile, trackMat);
+    const yPos = -zPos*SLOPE_TAN - 0.5/SLOPE_COS;
     tile.position.set(0, yPos, zPos);
     tile.rotation.x = SLOPE_ANGLE;
-    tile.receiveShadow = true;
     const half = (SEGMENT_LENGTH/2)*SLOPE_COS;
     tile.userData = { hasPlatform:true, zMin:zPos-half, zMax:zPos+half };
     scene.add(tile);
     trackSegments.push(tile);
 
-    const bm = new THREE.MeshBasicMaterial({ color:0x#0000FF });
-    const bGeo = new THREE.BoxGeometry(0.5,1.0,SEGMENT_LENGTH);
-    const lb = new THREE.Mesh(bGeo,bm); lb.position.set(-TRACK_WIDTH/2,0.5,0); tile.add(lb);
-    const rb = new THREE.Mesh(bGeo,bm); rb.position.set( TRACK_WIDTH/2,0.5,0); tile.add(rb);
+    // Borders reuse shared geoBorder
+    const lb = new THREE.Mesh(geoBorder, borderMat); lb.position.set(-TRACK_WIDTH/2, 0.5, 0); tile.add(lb);
+    const rb = new THREE.Mesh(geoBorder, borderMat); rb.position.set( TRACK_WIDTH/2, 0.5, 0); tile.add(rb);
 
     if (!isSafeStart) {
       if (nextIsGap) {
-        const sup = Math.random()<0.18;
+        const sup=Math.random()<0.18;
         const rw=sup?9.5:8.5, rl=sup?10:9, rh=sup?3.2:2.4;
-        const ramp = new THREE.Mesh(createWedgeGeometry(rw,rh,rl), sup?superRampMat:rampMat);
-        const rx = (Math.random()-0.5)*(TRACK_WIDTH-rw-2);
-        ramp.position.set(rx,0.5,7); ramp.castShadow=true; tile.add(ramp);
-        const rwz = zPos+7*SLOPE_COS;
+        const ramp=new THREE.Mesh(createWedgeGeometry(rw,rh,rl), sup?superRampMat:rampMat);
+        const rx=(Math.random()-0.5)*(TRACK_WIDTH-rw-2);
+        ramp.position.set(rx,0.5,7); tile.add(ramp);
+        const rwz=zPos+7*SLOPE_COS;
         if (sup) safeSegmentsCount=Math.max(safeSegmentsCount,8);
-        jumpRamps.push({ mesh:ramp, x:rx, width:rw, height:rh, length:rl,
+        jumpRamps.push({ x:rx, width:rw, height:rh, length:rl,
           zStart:rwz-(rl/2)*SLOPE_COS, zEnd:rwz+(rl/2)*SLOPE_COS, isSuper:sup });
       } else {
-        const rand = Math.random();
+        const rand=Math.random();
         if (rand < 0.20) {
           const sup=Math.random()<0.22, rw=sup?6.8:5.5, rl=sup?9.5:8, rh=sup?3:2;
           const ramp=new THREE.Mesh(createWedgeGeometry(rw,rh,rl), sup?superRampMat:rampMat);
           const rx=(Math.random()-0.5)*(TRACK_WIDTH-rw-2);
-          ramp.position.set(rx,0.5,0); ramp.castShadow=true; tile.add(ramp);
+          ramp.position.set(rx,0.5,0); tile.add(ramp);
           if (sup) safeSegmentsCount=Math.max(safeSegmentsCount,8);
-          jumpRamps.push({ mesh:ramp, x:rx, width:rw, height:rh, length:rl,
+          jumpRamps.push({ x:rx, width:rw, height:rh, length:rl,
             zStart:zPos-(rl/2)*SLOPE_COS, zEnd:zPos+(rl/2)*SLOPE_COS, isSuper:sup });
         } else if (rand < 0.38) {
-          const pad=new THREE.Mesh(new THREE.BoxGeometry(6,0.1,8), boostMat);
+          const pad=new THREE.Mesh(geoBoostPad, boostMat); // reused geo
           const bx=(Math.random()-0.5)*(TRACK_WIDTH-8);
           pad.position.set(bx,0.52,0); tile.add(pad);
           boostPads.push({ mesh:pad, x:bx, z:zPos, width:6, used:false });
         } else if (rand < 0.72) {
           const cnt=Math.floor(Math.random()*2)+1;
           for (let i=0;i<cnt;i++) {
-            const sz=2.2, obs=new THREE.Mesh(new THREE.BoxGeometry(sz,sz,sz), obstacleMat);
+            const obs=new THREE.Mesh(geoObs, obstacleMat); // reused geo
             const ox=(Math.random()-0.5)*(TRACK_WIDTH-5);
             const lz=i*10-5, wz=zPos+lz*SLOPE_COS;
-            obs.position.set(ox,0.5+sz/2,lz); obs.castShadow=true; tile.add(obs);
-            obstacles.push({ mesh:obs, x:ox, z:wz, size:sz });
+            obs.position.set(ox, 0.5+1.1, lz); tile.add(obs);
+            obstacles.push({ mesh:obs, x:ox, z:wz, size:2.2 });
           }
         }
         if (Math.random()<0.45) {
-          const gem=new THREE.Mesh(new THREE.OctahedronGeometry(0.8,0), gemMat);
+          const gem=new THREE.Mesh(geoGem, gemMat); // reused geo
           const gx=(Math.random()-0.5)*(TRACK_WIDTH-6);
           const lz=Math.random()*12-6, gz=zPos+lz*SLOPE_COS;
           gem.position.set(gx,1.8,lz); tile.add(gem);
@@ -593,20 +618,20 @@
   }
 
   function calcGround(x,z) {
-    if (Math.abs(x) > TRACK_WIDTH/2) return { isSolid:false, surfaceY:-9999 };
-    let seg=null;
+    if (Math.abs(x) > TRACK_WIDTH/2) return { isSolid:false };
+    let hasPlatform=false;
     for (let i=0;i<trackSegments.length;i++) {
       const s=trackSegments[i];
-      if (z>=s.userData.zMin && z<=s.userData.zMax) { seg=s; break; }
+      if (z>=s.userData.zMin && z<=s.userData.zMax) { hasPlatform=s.userData.hasPlatform; break; }
     }
-    if (!seg||!seg.userData.hasPlatform) return { isSolid:false, surfaceY:-9999 };
-    const floorY = -z*SLOPE_TAN;
+    if (!hasPlatform) return { isSolid:false };
+    const floorY=-z*SLOPE_TAN;
     for (let r=0;r<jumpRamps.length;r++) {
       const ramp=jumpRamps[r];
       if (z>=ramp.zStart && z<=ramp.zEnd && Math.abs(x-ramp.x)<=(ramp.width/2)+0.45) {
-        const prog=THREE.MathUtils.clamp((z-ramp.zStart)/(ramp.zEnd-ramp.zStart),0,1);
+        const prog=Math.min(1,Math.max(0,(z-ramp.zStart)/(ramp.zEnd-ramp.zStart)));
         return { isSolid:true, surfaceY:floorY+prog*ramp.height*SLOPE_COS,
-                 isOnRamp:true, rampData:ramp, rampProgress:prog, isSuper:ramp.isSuper };
+                 isOnRamp:true, rampProgress:prog, isSuper:ramp.isSuper };
       }
     }
     return { isSolid:true, surfaceY:floorY, isOnRamp:false };
@@ -614,40 +639,47 @@
 
   function updatePhysics() {
     if (!state.isRunning||state.isGameOver) return;
-    state.speed = Math.min(MAX_SPEED, state.speed+ACCELERATION);
-    let spd = state.speed;
+    frameCount++;
+    state.speed=Math.min(MAX_SPEED, state.speed+ACCELERATION);
+    let spd=state.speed;
 
-    if (state.boostTimer>0) { state.boostTimer--; spd*=1.45; document.getElementById("boost-badge").style.display=""; }
-    else { document.getElementById("boost-badge").style.display="none"; }
-    if (state.superJumpTimer>0) { state.superJumpTimer--; document.getElementById("super-badge").style.display=""; }
-    else { document.getElementById("super-badge").style.display="none"; }
+    const boostEl=document.getElementById("boost-badge");
+    const superEl=document.getElementById("super-badge");
+    if (state.boostTimer>0) { state.boostTimer--; spd*=1.45; boostEl.style.display=""; }
+    else boostEl.style.display="none";
+    if (state.superJumpTimer>0) { state.superJumpTimer--; superEl.style.display=""; }
+    else superEl.style.display="none";
 
     const sr=0.042;
     if (keys.left)       player.velX+=sr;
     else if (keys.right) player.velX-=sr;
     else                 player.velX*=0.82;
-    player.velX=THREE.MathUtils.clamp(player.velX,-0.48,0.48);
+    if (player.velX > 0.48) player.velX=0.48;
+    if (player.velX <-0.48) player.velX=-0.48;
 
     for (let s=0;s<2;s++) {
       const ss=spd/2, sv=player.velX/2, sg=GRAVITY/2;
       player.pos.x+=sv;
       player.pos.z+=ss*SLOPE_COS;
-      const g=calcGround(player.pos.x,player.pos.z);
-      const ty=g.surfaceY+(player.radius/SLOPE_COS);
+      const g=calcGround(player.pos.x, player.pos.z);
+      const ty = g.isSolid ? g.surfaceY+(player.radius/SLOPE_COS) : 0;
 
+      // boost pad check
       for (let b=0;b<boostPads.length;b++) {
         const pad=boostPads[b];
         if (!pad.used && Math.abs(player.pos.z-pad.z)<3.5 && Math.abs(player.pos.x-pad.x)<pad.width/2) {
           pad.used=true; state.boostTimer=90; pad.mesh.material=trackMat;
         }
       }
-      gems.forEach(gem=>{
+      // gem collection
+      for (let gi=0;gi<gems.length;gi++) {
+        const gem=gems[gi];
         if (!gem.collected) {
           if (Math.abs(player.pos.z-gem.z)<1.8 && Math.abs(player.pos.x-gem.x)<1.8) {
             gem.collected=true; if(gem.mesh.parent) gem.mesh.parent.remove(gem.mesh); state.gemsCollected++;
           } else { gem.mesh.rotation.y+=0.02; }
         }
-      });
+      }
 
       if (g.isSolid) {
         const hd=player.pos.y-ty;
@@ -655,8 +687,8 @@
           if (g.isOnRamp&&g.rampProgress>=0.75) {
             if (!player.hasLaunchedThisRamp) {
               player.hasLaunchedThisRamp=true;
-              if (g.isSuper) { player.velY=(spd*0.22+0.12)*1.85; state.boostTimer=110; state.superJumpTimer=110; }
-              else           { player.velY=spd*0.22+0.12; }
+              player.velY = g.isSuper ? (spd*0.22+0.12)*1.85 : spd*0.22+0.12;
+              if (g.isSuper) { state.boostTimer=110; state.superJumpTimer=110; }
               player.isGrounded=false;
             } else { player.pos.y+=player.velY; }
           } else {
@@ -677,33 +709,40 @@
     player.mesh.position.copy(player.pos);
     state.score=Math.max(0,Math.floor(player.pos.z));
 
-    const co=new THREE.Vector3(0,4.8,-9.5);
-    camera.position.lerp(player.pos.clone().add(co),0.18);
-    camera.lookAt(player.pos.clone().add(new THREE.Vector3(0,0.2,6)));
+    // Camera — reuse vectors, no clone()
+    _camPos.copy(player.pos).add(_camOffset);
+    camera.position.lerp(_camPos, 0.18);
+    _camTarget.set(player.pos.x, player.pos.y+0.2, player.pos.z+6);
+    camera.lookAt(_camTarget);
     const tFOV=(state.superJumpTimer>0||state.boostTimer>0)?78:65;
-    camera.fov=THREE.MathUtils.lerp(camera.fov,tFOV,0.1);
+    camera.fov+=(tFOV-camera.fov)*0.1;
     camera.updateProjectionMatrix();
 
+    // Obstacle collisions + cleanup
     obstacles=obstacles.filter(obs=>{
       if (obs.z<player.pos.z-40) return false;
       const dz=Math.abs(player.pos.z-obs.z), dx=Math.abs(player.pos.x-obs.x);
       const cy=-obs.z*SLOPE_TAN+(0.5+obs.size/2)*SLOPE_COS, dy=Math.abs(player.pos.y-cy);
-      if (dz<player.radius+obs.size/2-0.2 && dx<player.radius+obs.size/2-0.2 && dy<player.radius+obs.size/2-0.2)
-        triggerGameOver("CRASHED!","You hit a red hazard block.");
+      const hit=obs.size/2-0.2+player.radius;
+      if (dz<hit && dx<hit && dy<hit) triggerGameOver("CRASHED!","You hit a red hazard block.");
       return true;
     });
 
+    // Prune old track tiles
     trackSegments=trackSegments.filter(s=>{
-      if (s.position&&s.position.z<player.pos.z-50) { scene.remove(s); return false; }
+      if (s.position && s.position.z < player.pos.z-50) { scene.remove(s); return false; }
       return true;
     });
+    // Prune stale ramp data
+    jumpRamps=jumpRamps.filter(r=>r.zEnd>player.pos.z-60);
 
     populateTrack();
-    const ey=-player.pos.z*SLOPE_TAN;
-    if (player.pos.y<ey-12||Math.abs(player.pos.x)>TRACK_WIDTH/2+5)
+
+    if (player.pos.y < -player.pos.z*SLOPE_TAN-12 || Math.abs(player.pos.x)>TRACK_WIDTH/2+5)
       triggerGameOver("FELL OFF!","You dropped into the void.");
 
-    updateGameUI();
+    // Throttle DOM updates to every 4 frames
+    if (frameCount%4===0) updateGameUI();
   }
 
   function bindGameEvents() {
@@ -723,21 +762,18 @@
     });
     document.getElementById("start-btn").addEventListener("click", startGame);
     document.getElementById("restart-btn").addEventListener("click", resetGame);
-
     const bl=document.getElementById("btn-left"), br=document.getElementById("btn-right");
     bl.addEventListener("touchstart",e=>{e.preventDefault();keys.left=true;});
     bl.addEventListener("touchend",  e=>{e.preventDefault();keys.left=false;});
     br.addEventListener("touchstart",e=>{e.preventDefault();keys.right=true;});
     br.addEventListener("touchend",  e=>{e.preventDefault();keys.right=false;});
-
     window.addEventListener("touchstart",e=>{
       if(e.target.closest("button")) return; isTouching=true; touchX=e.touches[0].clientX;
     });
     window.addEventListener("touchmove",e=>{
       if(!isTouching||e.target.closest("button")) return;
       const d=e.touches[0].clientX-touchX; touchX=e.touches[0].clientX;
-      if(d<-2){keys.left=true;keys.right=false;}
-      else if(d>2){keys.right=true;keys.left=false;}
+      if(d<-2){keys.left=true;keys.right=false;} else if(d>2){keys.right=true;keys.left=false;}
     });
     window.addEventListener("touchend",()=>{ isTouching=false; keys.left=false; keys.right=false; });
   }
@@ -745,9 +781,9 @@
   function startGame() { document.getElementById("start-screen").style.display="none"; state.isRunning=true; }
 
   function resetGame() {
-    trackSegments.forEach(s=>{if(s.position)scene.remove(s);});
+    trackSegments.forEach(s=>{ if(s.position) scene.remove(s); });
     trackSegments=[]; obstacles=[]; jumpRamps=[]; boostPads=[]; gems=[];
-    pendingGap=false; safeSegmentsCount=4; nextSegmentZ=0;
+    pendingGap=false; safeSegmentsCount=4; nextSegmentZ=0; frameCount=0;
 
     const sy=player.radius/SLOPE_COS;
     player.pos.set(0,sy,0); player.velX=0; player.velY=0;
@@ -755,7 +791,6 @@
     player.mesh.position.copy(player.pos);
 
     Object.assign(state,{ speed:BASE_SPEED, score:0, gemsCollected:0, boostTimer:0, superJumpTimer:0, isGameOver:false, isRunning:true });
-
     populateTrack();
     document.getElementById("game-over-screen").style.display="none";
     document.getElementById("start-screen").style.display="none";
