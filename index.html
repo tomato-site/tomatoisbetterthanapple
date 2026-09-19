@@ -218,11 +218,11 @@
   .game-screen {
     position: absolute; inset: 0;
     display: flex; align-items: center; justify-content: center;
-    z-index: 20; padding: 16px;
+    z-index: 20; padding: 16px; overflow-y: auto;
   }
   .game-modal {
     border-radius: 24px; padding: 32px;
-    max-width: 420px; width: 100%;
+    max-width: 400px; width: 100%;
     text-align: center;
     display: flex; flex-direction: column; align-items: center;
     color: #fff;
@@ -267,8 +267,8 @@
 
 <!-- ══ TAB NAV ══ -->
 <nav id="tab-nav">
-  <button class="tab-btn active" onclick="showTab('article')">thing about tomatos</button>
-  <button class="tab-btn"        onclick="showTab('game')">a game with nothing to do with tomatos</button>
+  <button class="tab-btn active" onclick="showTab('article')">🍅 THE CASE</button>
+  <button class="tab-btn"        onclick="showTab('game')">🎮 THE GAME</button>
 </nav>
 
 <!-- ══ ARTICLE PANEL ══ -->
@@ -357,6 +357,12 @@
           <span style="color:#64748b">BEST: <span id="high-score-text">0m</span></span>
         </div>
       </div>
+      <!-- World best — centre of HUD -->
+      <div class="glass-panel hud-box" style="text-align:center; min-width:110px">
+        <div class="hud-label">🌍 WORLD</div>
+        <div style="font-family:monospace;font-weight:900;font-size:14px;color:#22d3ee"><span id="wr-score">—m</span></div>
+        <div style="font-family:monospace;font-weight:700;font-size:12px;color:#e879f9"><span id="wr-gems">♦—</span></div>
+      </div>
       <div class="glass-panel hud-box" style="min-width:130px; text-align:right">
         <div class="hud-label">Speed</div>
         <div id="speed-text" class="neon-glow-amber">45 MPH</div>
@@ -384,11 +390,11 @@
 
     <!-- Game Over Screen -->
     <div id="game-over-screen" class="game-screen" style="display:none">
-      <div class="glass-panel game-modal" style="border:1px solid rgba(244,63,94,0.4)">
-        <div class="modal-icon" style="background:rgba(244,63,94,0.15); border:1px solid rgba(244,63,94,0.4); color:#f87171">💥</div>
-        <h2 id="crash-title">CRASHED!</h2>
-        <p id="crash-desc">You lost control on the slope.</p>
-        <div class="stats-grid">
+      <div class="glass-panel game-modal" style="border:1px solid rgba(244,63,94,0.4); padding:24px; gap:12px;">
+        <div class="modal-icon" style="background:rgba(244,63,94,0.15); border:1px solid rgba(244,63,94,0.4); color:#f87171; width:48px; height:48px; margin-bottom:8px;">💥</div>
+        <h2 id="crash-title" style="font-size:26px; margin-bottom:2px;">CRASHED!</h2>
+        <p id="crash-desc" style="font-size:13px; margin-bottom:8px;">You lost control on the slope.</p>
+        <div class="stats-grid" style="margin-bottom:8px;">
           <div class="stat-cell"><div class="stat-label">Score</div><div class="stat-val" id="final-score" style="color:#22d3ee">0m</div></div>
           <div class="stat-cell"><div class="stat-label">Gems</div><div class="stat-val" id="final-gems" style="color:#e879f9">0</div></div>
         </div>
@@ -396,10 +402,10 @@
       </div>
     </div>
 
-    <!-- Touch Controls -->
-    <div id="touch-controls">
-      <button id="btn-left"  class="touch-btn glass-panel">◄</button>
-      <button id="btn-right" class="touch-btn glass-panel">►</button>
+    <!-- Touch Controls — fixed to bottom of screen -->
+    <div id="touch-controls" style="position:fixed; bottom:24px; left:0; right:0; padding:0 24px; display:flex; justify-content:space-between; pointer-events:none; z-index:200;">
+      <button id="btn-left"  class="touch-btn glass-panel" style="pointer-events:auto; width:72px; height:72px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:26px; font-weight:700; color:#22d3ee; cursor:pointer;">◄</button>
+      <button id="btn-right" class="touch-btn glass-panel" style="pointer-events:auto; width:72px; height:72px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:26px; font-weight:700; color:#22d3ee; cursor:pointer;">►</button>
     </div>
   </div>
 </div>
@@ -416,17 +422,6 @@
 
   /* ══════════════════════════════════════════════════════════
      SLOPE 3D — PERFORMANCE-OPTIMISED ENGINE
-     Key wins:
-       • No shadows at all (biggest GPU drain removed)
-       • MeshLambertMaterial instead of MeshStandardMaterial (no PBR cost)
-       • Shared, reused geometries (BoxGeo, OctGeo created once)
-       • pixelRatio capped at 1
-       • No antialias
-       • Smaller ball geo (14-seg instead of 32-seg)
-       • No WireframeGeometry overlay
-       • Look-ahead reduced 300→180 so fewer live meshes exist at once
-       • Camera target reused vectors (no per-frame clone())
-       • DOM updates throttled to every 4 frames
   ══════════════════════════════════════════════════════════ */
   var keys = { left: false, right: false };
   var touchX = 0, isTouching = false;
@@ -437,21 +432,28 @@
   const SLOPE_COS   = Math.cos(SLOPE_ANGLE);
   const BASE_SPEED  = 0.85, ACCELERATION = 0.00012, MAX_SPEED = 1.80, GRAVITY = -0.018;
 
+  const NARROW_WIDTH = 3.2, NARROW_AMP = 6.5, NARROW_FREQ = 0.55;
+  const NARROW_SPEED_MPH = 50;
+
+  /* ── CHAIN narrow constants (60 MPH+) ── */
+  const CHAIN_SPEED_MPH  = 60;
+  const CHAIN_CHANCE     = 0.025; // per segment once above 60 MPH
+  const CHAIN_NARROW_SEGS = 5;    // ~2 s of narrow at 60 MPH
+  const CHAIN_GAP_SEGS   = 1;     // one void segment between sections
+  // sequence: narrow(5) → gap(1) → narrow(5) → gap(1) → narrow(5)
+  // phases 0,2,4 = narrow;  phases 1,3 = gap
+
   let scene, camera, renderer;
-  // Shared reusable geometries
-  let geoTile, geoBorder, geoObs, geoBoostPad, geoGem;
-  // Shared materials (Lambert = fast, no PBR shading math)
-  let ballMat, trackMat, borderMat, obstacleMat, rampMat, boostMat, gemMat, superRampMat;
-  // Reusable camera vectors (avoid per-frame allocation)
-  const _camOffset  = new THREE.Vector3(0, 4.8, -9.5);
-  const _camTarget  = new THREE.Vector3();
-  const _camPos     = new THREE.Vector3();
+  let geoTile, geoNarrowTile, geoBorder, geoObs, geoBoostPad, geoGem;
+  let ballMat, trackMat, borderMat, narrowMat, obstacleMat, rampMat, boostMat, gemMat, superRampMat;
+  const _camOffset = new THREE.Vector3(0, 4.8, -9.5);
+  const _camTarget = new THREE.Vector3(), _camPos = new THREE.Vector3();
   let frameCount = 0;
 
   let state = {
     isRunning: false, isGameOver: false,
     score: 0, gemsCollected: 0,
-    highScore: parseInt(localStorage.getItem("slope3d_highscore") || "0", 10),
+    highScore: parseInt(localStorage.getItem('slope3d_highscore') || '0', 10),
     speed: BASE_SPEED, boostTimer: 0, superJumpTimer: 0
   };
 
@@ -464,17 +466,18 @@
 
   let trackSegments=[], obstacles=[], jumpRamps=[], boostPads=[], gems=[];
   let nextSegmentZ=0, pendingGap=false, safeSegmentsCount=4;
+  let narrowRemaining=0, narrowPhase=0;
+  let chainMode=false, chainPhase=0, chainSegsLeft=0; // chain narrow state
 
-  // Build a wedge geometry — still created per-ramp since dimensions vary
   function createWedgeGeometry(width, height, length) {
     const geo = new THREE.BufferGeometry();
     const w=width/2, l=length/2, h=height;
     const v = new Float32Array([
       -w,0,-l, w,0,-l, -w,0,l,  w,0,-l, w,0,l, -w,0,l,
-      -w,0,-l, -w,h,l, w,0,-l,  w,0,-l, -w,h,l, w,h,l,
-      -w,0,l,  w,0,l,  -w,h,l,  w,0,l,  w,h,l,  -w,h,l,
-      -w,0,-l, -w,0,l, -w,h,l,
-       w,0,-l,  w,h,l,  w,0,l
+      -w,0,-l,-w,h, l, w,0,-l,  w,0,-l,-w,h,l, w,h,l,
+      -w,0, l, w,0,l, -w,h,l,   w,0,l,  w,h,l,-w,h,l,
+      -w,0,-l,-w,0,l,-w,h,l,
+       w,0,-l, w,h,l, w,0,l
     ]);
     geo.setAttribute('position', new THREE.BufferAttribute(v,3));
     geo.computeVertexNormals();
@@ -482,37 +485,29 @@
   }
 
   function initGame() {
-    const canvas = document.getElementById("three-canvas");
+    const canvas = document.getElementById('three-canvas');
     const W = canvas.clientWidth, H = canvas.clientHeight;
-
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x030712);
     scene.fog = new THREE.FogExp2(0x030712, 0.008);
-
     camera = new THREE.PerspectiveCamera(65, W/H, 0.1, 600);
-
-    // NO antialias, pixel ratio capped at 1 — huge perf win
     renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
-    renderer.setSize(W, H);
-    renderer.setPixelRatio(1);
-    renderer.shadowMap.enabled = false; // shadows OFF
+    renderer.setSize(W, H); renderer.setPixelRatio(1); renderer.shadowMap.enabled = false;
 
-    // Lighting: ambient only is fine without shadows/PBR
     scene.add(new THREE.AmbientLight(0xffffff, 1.1));
     const fill = new THREE.DirectionalLight(0x8888ff, 0.4);
-    fill.position.set(-10, 20, -10);
-    scene.add(fill);
+    fill.position.set(-10, 20, -10); scene.add(fill);
 
-    // SHARED geometries — created once, reused for every tile/obstacle/gem
-    geoTile     = new THREE.BoxGeometry(TRACK_WIDTH, 1.0, SEGMENT_LENGTH);
-    geoBorder   = new THREE.BoxGeometry(0.5, 1.0, SEGMENT_LENGTH);
-    geoObs      = new THREE.BoxGeometry(2.2, 2.2, 2.2);
-    geoBoostPad = new THREE.BoxGeometry(6, 0.1, 8);
-    geoGem      = new THREE.OctahedronGeometry(0.8, 0);
+    geoTile       = new THREE.BoxGeometry(TRACK_WIDTH, 1.0, SEGMENT_LENGTH);
+    geoNarrowTile = new THREE.BoxGeometry(NARROW_WIDTH, 1.0, SEGMENT_LENGTH);
+    geoBorder     = new THREE.BoxGeometry(0.5, 1.0, SEGMENT_LENGTH);
+    geoObs        = new THREE.BoxGeometry(2.2, 2.2, 2.2);
+    geoBoostPad   = new THREE.BoxGeometry(6, 0.1, 8);
+    geoGem        = new THREE.OctahedronGeometry(0.8, 0);
 
-    // Lambert materials — no per-pixel lighting calc, very fast
     trackMat     = new THREE.MeshLambertMaterial({ color: 0x0f172a });
     borderMat    = new THREE.MeshBasicMaterial({ color: 0x2563eb });
+    narrowMat    = new THREE.MeshLambertMaterial({ color: 0xf97316, emissive: 0x7a2a00 });
     obstacleMat  = new THREE.MeshLambertMaterial({ color: 0xff0044, emissive: 0x660011 });
     rampMat      = new THREE.MeshLambertMaterial({ color: 0x0088ff, emissive: 0x002255 });
     boostMat     = new THREE.MeshLambertMaterial({ color: 0xffaa00, emissive: 0x553300 });
@@ -520,19 +515,18 @@
     gemMat       = new THREE.MeshLambertMaterial({ color: 0xd946ef, emissive: 0x5a0a65 });
     ballMat      = new THREE.MeshLambertMaterial({ color: 0x22c55e, emissive: 0x0a4020 });
 
-    // Ball — 14 segments instead of 32 (looks fine at game speed)
-    const ballGeo  = new THREE.SphereGeometry(player.radius, 14, 10);
-    player.mesh    = new THREE.Mesh(ballGeo, ballMat);
+    const ballGeo = new THREE.SphereGeometry(player.radius, 14, 10);
+    player.mesh = new THREE.Mesh(ballGeo, ballMat);
     scene.add(player.mesh);
 
     updateHighScoreUI();
     bindGameEvents();
     resetGame();
     animateGame();
+    initLeaderboard(); // connect to shared db (non-blocking)
   }
 
   function populateTrack() {
-    // Reduced look-ahead: 180 instead of 300 → fewer live draw calls
     const targetZ = player.pos.z + 180;
     while (nextSegmentZ < targetZ) { createSegment(nextSegmentZ); nextSegmentZ += SEGMENT_LENGTH; }
   }
@@ -540,96 +534,168 @@
   function createSegment(zCenter) {
     const isSafeStart = zCenter < 80;
     const zPos = zCenter * SLOPE_COS;
+    const half = (SEGMENT_LENGTH/2)*SLOPE_COS;
+    const curMPH = Math.round(state.speed * 52);
 
-    if (pendingGap) {
-      pendingGap = false;
-      const half = (SEGMENT_LENGTH/2)*SLOPE_COS;
-      trackSegments.push({ userData: { hasPlatform:false, zMin:zPos-half, zMax:zPos+half } });
-      safeSegmentsCount = 4;
+    /* ── CHAIN NARROW MODE ── */
+    if (chainMode) {
+      const isNarrowPhase = (chainPhase % 2 === 0); // phases 0,2,4 = narrow; 1,3 = gap
+      const isLastSegOfPhase = (chainSegsLeft === 1);
+
+      if (!isNarrowPhase) {
+        /* gap segment — void, no mesh */
+        trackSegments.push({ userData: { hasPlatform:false, zMin:zPos-half, zMax:zPos+half } });
+      } else {
+        /* narrow segment — no borders, no obstacles */
+        const tile = new THREE.Mesh(geoNarrowTile, narrowMat);
+        const yPos = -zPos*SLOPE_TAN - 0.5/SLOPE_COS;
+        tile.position.set(0, yPos, zPos); tile.rotation.x = SLOPE_ANGLE;
+        tile.userData = { hasPlatform:true, zMin:zPos-half, zMax:zPos+half,
+                          tileWidth:NARROW_WIDTH, xCenter:0 };
+        scene.add(tile); trackSegments.push(tile);
+
+        /* ramp on the last segment of each narrow phase, to jump the gap */
+        if (isLastSegOfPhase) {
+          const isLastPhase = (chainPhase === 4);
+          const rw=2.5, rl=6, rh = isLastPhase ? 2.6 : 1.8; // bigger ramp at end of final section
+          const ramp = new THREE.Mesh(createWedgeGeometry(rw, rh, rl),
+                                      isLastPhase ? superRampMat : rampMat);
+          const localZ = SEGMENT_LENGTH/2 - rl/2 - 1; // near the far edge of the tile
+          ramp.position.set(0, 0.5, localZ); tile.add(ramp);
+          const rwz = zPos + localZ*SLOPE_COS;
+          jumpRamps.push({ x:0, width:rw, height:rh, length:rl,
+            zStart:rwz-(rl/2)*SLOPE_COS, zEnd:rwz+(rl/2)*SLOPE_COS, isSuper:isLastPhase });
+          if (isLastPhase) safeSegmentsCount = Math.max(safeSegmentsCount, 6);
+        }
+      }
+
+      /* advance chain state */
+      chainSegsLeft--;
+      if (chainSegsLeft === 0) {
+        chainPhase++;
+        if (chainPhase > 4) {
+          chainMode = false; // sequence complete
+          safeSegmentsCount = Math.max(safeSegmentsCount, 4);
+        } else {
+          chainSegsLeft = (chainPhase % 2 === 0) ? CHAIN_NARROW_SEGS : CHAIN_GAP_SEGS;
+        }
+      }
       return;
     }
 
-    let nextIsGap = false;
-    if (safeSegmentsCount > 0) { safeSegmentsCount--; }
-    else if (!isSafeStart) {
-      nextIsGap = Math.random() < 0.22;
-      if (nextIsGap) pendingGap = true;
+    /* ── NORMAL SEGMENT GENERATION ── */
+    if (pendingGap) {
+      pendingGap = false;
+      trackSegments.push({ userData: { hasPlatform:false, zMin:zPos-half, zMax:zPos+half } });
+      safeSegmentsCount = 4; return;
     }
 
-    // Reuse shared geoTile — no new geometry allocation per tile
-    const tile = new THREE.Mesh(geoTile, trackMat);
+    /* check for chain trigger — only outside safe zone, not during existing narrow */
+    if (!isSafeStart && narrowRemaining===0 && !pendingGap
+        && curMPH >= CHAIN_SPEED_MPH && Math.random() < CHAIN_CHANCE) {
+      chainMode = true; chainPhase = 0; chainSegsLeft = CHAIN_NARROW_SEGS;
+      /* recurse to build this segment as the first chain narrow */
+      createSegment(zCenter); return;
+    }
+
+    const isNarrow = !isSafeStart && narrowRemaining===0 && !pendingGap
+                     && curMPH >= NARROW_SPEED_MPH && Math.random() < 0.03;
+    if (isNarrow) { narrowRemaining = Math.floor(Math.random()*3)+3; narrowPhase = Math.random()*Math.PI*2; }
+    if (narrowRemaining > 0) narrowRemaining--;
+    const isNarrowTile = isNarrow || narrowRemaining > 0;
+
+    let nextIsGap = false;
+    if (!isNarrowTile) {
+      if (safeSegmentsCount > 0) safeSegmentsCount--;
+      else if (!isSafeStart) { nextIsGap = Math.random() < 0.22; if (nextIsGap) pendingGap = true; }
+    }
+
+    const tileWidth = isNarrowTile ? NARROW_WIDTH : TRACK_WIDTH;
+    let xCenter = 0;
+    if (isNarrowTile) {
+      xCenter = Math.sin(narrowPhase) * NARROW_AMP;
+      narrowPhase += NARROW_FREQ;
+      const mx = (TRACK_WIDTH - NARROW_WIDTH) / 2;
+      xCenter = Math.max(-mx, Math.min(mx, xCenter));
+    }
+
+    const tile = new THREE.Mesh(isNarrowTile ? geoNarrowTile : geoTile, isNarrowTile ? narrowMat : trackMat);
     const yPos = -zPos*SLOPE_TAN - 0.5/SLOPE_COS;
-    tile.position.set(0, yPos, zPos);
-    tile.rotation.x = SLOPE_ANGLE;
-    const half = (SEGMENT_LENGTH/2)*SLOPE_COS;
-    tile.userData = { hasPlatform:true, zMin:zPos-half, zMax:zPos+half };
-    scene.add(tile);
-    trackSegments.push(tile);
+    tile.position.set(xCenter, yPos, zPos); tile.rotation.x = SLOPE_ANGLE;
+    tile.userData = { hasPlatform:true, zMin:zPos-half, zMax:zPos+half, tileWidth, xCenter };
+    scene.add(tile); trackSegments.push(tile);
 
-    // Borders reuse shared geoBorder
-    const lb = new THREE.Mesh(geoBorder, borderMat); lb.position.set(-TRACK_WIDTH/2, 0.5, 0); tile.add(lb);
-    const rb = new THREE.Mesh(geoBorder, borderMat); rb.position.set( TRACK_WIDTH/2, 0.5, 0); tile.add(rb);
+    /* borders only on normal-width tiles */
+    if (!isNarrowTile) {
+      const lb = new THREE.Mesh(geoBorder, borderMat); lb.position.set(-tileWidth/2, 0.5, 0); tile.add(lb);
+      const rb = new THREE.Mesh(geoBorder, borderMat); rb.position.set( tileWidth/2, 0.5, 0); tile.add(rb);
+    }
 
-    if (!isSafeStart) {
+    if (!isSafeStart && !isNarrowTile) {
       if (nextIsGap) {
-        const sup=Math.random()<0.18;
+        const sup = Math.random()<0.18;
         const rw=sup?9.5:8.5, rl=sup?10:9, rh=sup?3.2:2.4;
-        const ramp=new THREE.Mesh(createWedgeGeometry(rw,rh,rl), sup?superRampMat:rampMat);
-        const rx=(Math.random()-0.5)*(TRACK_WIDTH-rw-2);
-        ramp.position.set(rx,0.5,7); tile.add(ramp);
-        const rwz=zPos+7*SLOPE_COS;
-        if (sup) safeSegmentsCount=Math.max(safeSegmentsCount,8);
+        const ramp = new THREE.Mesh(createWedgeGeometry(rw,rh,rl), sup?superRampMat:rampMat);
+        const rx = (Math.random()-0.5)*(TRACK_WIDTH-rw-2);
+        ramp.position.set(rx, 0.5, 7); tile.add(ramp);
+        const rwz = zPos+7*SLOPE_COS;
+        if (sup) safeSegmentsCount = Math.max(safeSegmentsCount, 8);
         jumpRamps.push({ x:rx, width:rw, height:rh, length:rl,
           zStart:rwz-(rl/2)*SLOPE_COS, zEnd:rwz+(rl/2)*SLOPE_COS, isSuper:sup });
       } else {
-        const rand=Math.random();
+        const rand = Math.random();
         if (rand < 0.20) {
           const sup=Math.random()<0.22, rw=sup?6.8:5.5, rl=sup?9.5:8, rh=sup?3:2;
-          const ramp=new THREE.Mesh(createWedgeGeometry(rw,rh,rl), sup?superRampMat:rampMat);
-          const rx=(Math.random()-0.5)*(TRACK_WIDTH-rw-2);
-          ramp.position.set(rx,0.5,0); tile.add(ramp);
-          if (sup) safeSegmentsCount=Math.max(safeSegmentsCount,8);
+          const ramp = new THREE.Mesh(createWedgeGeometry(rw,rh,rl), sup?superRampMat:rampMat);
+          const rx = (Math.random()-0.5)*(TRACK_WIDTH-rw-2);
+          ramp.position.set(rx, 0.5, 0); tile.add(ramp);
+          if (sup) safeSegmentsCount = Math.max(safeSegmentsCount, 8);
           jumpRamps.push({ x:rx, width:rw, height:rh, length:rl,
             zStart:zPos-(rl/2)*SLOPE_COS, zEnd:zPos+(rl/2)*SLOPE_COS, isSuper:sup });
         } else if (rand < 0.38) {
-          const pad=new THREE.Mesh(geoBoostPad, boostMat); // reused geo
-          const bx=(Math.random()-0.5)*(TRACK_WIDTH-8);
-          pad.position.set(bx,0.52,0); tile.add(pad);
+          const pad = new THREE.Mesh(geoBoostPad, boostMat);
+          const bx = (Math.random()-0.5)*(TRACK_WIDTH-8);
+          pad.position.set(bx, 0.52, 0); tile.add(pad);
           boostPads.push({ mesh:pad, x:bx, z:zPos, width:6, used:false });
         } else if (rand < 0.72) {
-          const cnt=Math.floor(Math.random()*2)+1;
-          for (let i=0;i<cnt;i++) {
-            const obs=new THREE.Mesh(geoObs, obstacleMat); // reused geo
-            const ox=(Math.random()-0.5)*(TRACK_WIDTH-5);
-            const lz=i*10-5, wz=zPos+lz*SLOPE_COS;
+          const cnt = Math.floor(Math.random()*2)+1;
+          for (let i=0; i<cnt; i++) {
+            const obs = new THREE.Mesh(geoObs, obstacleMat);
+            const ox = (Math.random()-0.5)*(TRACK_WIDTH-5);
+            const lz = i*10-5, wz = zPos+lz*SLOPE_COS;
             obs.position.set(ox, 0.5+1.1, lz); tile.add(obs);
             obstacles.push({ mesh:obs, x:ox, z:wz, size:2.2 });
           }
         }
-        if (Math.random()<0.45) {
-          const gem=new THREE.Mesh(geoGem, gemMat); // reused geo
-          const gx=(Math.random()-0.5)*(TRACK_WIDTH-6);
-          const lz=Math.random()*12-6, gz=zPos+lz*SLOPE_COS;
-          gem.position.set(gx,1.8,lz); tile.add(gem);
+        if (Math.random() < 0.45) {
+          const gem = new THREE.Mesh(geoGem, gemMat);
+          const gx = (Math.random()-0.5)*(TRACK_WIDTH-6);
+          const lz = Math.random()*12-6, gz = zPos+lz*SLOPE_COS;
+          gem.position.set(gx, 1.8, lz); tile.add(gem);
           gems.push({ mesh:gem, x:gx, z:gz, collected:false });
         }
       }
     }
   }
 
-  function calcGround(x,z) {
-    if (Math.abs(x) > TRACK_WIDTH/2) return { isSolid:false };
-    let hasPlatform=false;
-    for (let i=0;i<trackSegments.length;i++) {
-      const s=trackSegments[i];
-      if (z>=s.userData.zMin && z<=s.userData.zMax) { hasPlatform=s.userData.hasPlatform; break; }
+  function calcGround(x, z) {
+    let hasPlatform=false, segWidth=TRACK_WIDTH, xCenter=0;
+    for (let i=0; i<trackSegments.length; i++) {
+      const s = trackSegments[i];
+      if (z >= s.userData.zMin && z <= s.userData.zMax) {
+        hasPlatform = s.userData.hasPlatform;
+        segWidth = s.userData.tileWidth || TRACK_WIDTH;
+        xCenter = s.userData.xCenter || 0;
+        break;
+      }
     }
-    if (!hasPlatform) return { isSolid:false };
-    const floorY=-z*SLOPE_TAN;
-    for (let r=0;r<jumpRamps.length;r++) {
-      const ramp=jumpRamps[r];
-      if (z>=ramp.zStart && z<=ramp.zEnd && Math.abs(x-ramp.x)<=(ramp.width/2)+0.45) {
-        const prog=Math.min(1,Math.max(0,(z-ramp.zStart)/(ramp.zEnd-ramp.zStart)));
+    if (Math.abs(x - xCenter) > segWidth/2) return { isSolid: false };
+    if (!hasPlatform) return { isSolid: false };
+    const floorY = -z * SLOPE_TAN;
+    for (let r=0; r<jumpRamps.length; r++) {
+      const ramp = jumpRamps[r];
+      if (z >= ramp.zStart && z <= ramp.zEnd && Math.abs(x-ramp.x) <= (ramp.width/2)+0.45) {
+        const prog = Math.min(1, Math.max(0, (z-ramp.zStart)/(ramp.zEnd-ramp.zStart)));
         return { isSolid:true, surfaceY:floorY+prog*ramp.height*SLOPE_COS,
                  isOnRamp:true, rampProgress:prog, isSuper:ramp.isSuper };
       }
@@ -638,187 +704,217 @@
   }
 
   function updatePhysics() {
-    if (!state.isRunning||state.isGameOver) return;
+    if (!state.isRunning || state.isGameOver) return;
     frameCount++;
-    state.speed=Math.min(MAX_SPEED, state.speed+ACCELERATION);
-    let spd=state.speed;
+    state.speed = Math.min(MAX_SPEED, state.speed + ACCELERATION);
+    let spd = state.speed;
 
-    const boostEl=document.getElementById("boost-badge");
-    const superEl=document.getElementById("super-badge");
-    if (state.boostTimer>0) { state.boostTimer--; spd*=1.45; boostEl.style.display=""; }
-    else boostEl.style.display="none";
-    if (state.superJumpTimer>0) { state.superJumpTimer--; superEl.style.display=""; }
-    else superEl.style.display="none";
+    const boostEl = document.getElementById('boost-badge');
+    const superEl = document.getElementById('super-badge');
+    if (state.boostTimer>0) { state.boostTimer--; spd*=1.45; boostEl.style.display=''; }
+    else boostEl.style.display='none';
+    if (state.superJumpTimer>0) { state.superJumpTimer--; superEl.style.display=''; }
+    else superEl.style.display='none';
 
-    const sr=0.042;
-    if (keys.left)       player.velX+=sr;
-    else if (keys.right) player.velX-=sr;
-    else                 player.velX*=0.82;
-    if (player.velX > 0.48) player.velX=0.48;
-    if (player.velX <-0.48) player.velX=-0.48;
+    const sr = 0.042;
+    if (keys.left)       player.velX += sr;
+    else if (keys.right) player.velX -= sr;
+    else                 player.velX *= 0.82;
+    if (player.velX >  0.48) player.velX =  0.48;
+    if (player.velX < -0.48) player.velX = -0.48;
 
-    for (let s=0;s<2;s++) {
+    for (let s=0; s<2; s++) {
       const ss=spd/2, sv=player.velX/2, sg=GRAVITY/2;
-      player.pos.x+=sv;
-      player.pos.z+=ss*SLOPE_COS;
-      const g=calcGround(player.pos.x, player.pos.z);
-      const ty = g.isSolid ? g.surfaceY+(player.radius/SLOPE_COS) : 0;
+      player.pos.x += sv;
+      player.pos.z += ss * SLOPE_COS;
+      const g = calcGround(player.pos.x, player.pos.z);
+      const ty = g.isSolid ? g.surfaceY + (player.radius/SLOPE_COS) : 0;
 
-      // boost pad check
-      for (let b=0;b<boostPads.length;b++) {
-        const pad=boostPads[b];
+      for (let b=0; b<boostPads.length; b++) {
+        const pad = boostPads[b];
         if (!pad.used && Math.abs(player.pos.z-pad.z)<3.5 && Math.abs(player.pos.x-pad.x)<pad.width/2) {
           pad.used=true; state.boostTimer=90; pad.mesh.material=trackMat;
         }
       }
-      // gem collection
-      for (let gi=0;gi<gems.length;gi++) {
-        const gem=gems[gi];
+      for (let gi=0; gi<gems.length; gi++) {
+        const gem = gems[gi];
         if (!gem.collected) {
           if (Math.abs(player.pos.z-gem.z)<1.8 && Math.abs(player.pos.x-gem.x)<1.8) {
             gem.collected=true; if(gem.mesh.parent) gem.mesh.parent.remove(gem.mesh); state.gemsCollected++;
-          } else { gem.mesh.rotation.y+=0.02; }
+          } else gem.mesh.rotation.y += 0.02;
         }
       }
 
       if (g.isSolid) {
-        const hd=player.pos.y-ty;
-        if (player.isGrounded||hd<=0.85) {
-          if (g.isOnRamp&&g.rampProgress>=0.75) {
+        const hd = player.pos.y - ty;
+        if (player.isGrounded || hd <= 0.85) {
+          if (g.isOnRamp && g.rampProgress >= 0.75) {
             if (!player.hasLaunchedThisRamp) {
-              player.hasLaunchedThisRamp=true;
+              player.hasLaunchedThisRamp = true;
               player.velY = g.isSuper ? (spd*0.22+0.12)*1.85 : spd*0.22+0.12;
               if (g.isSuper) { state.boostTimer=110; state.superJumpTimer=110; }
-              player.isGrounded=false;
-            } else { player.pos.y+=player.velY; }
+              player.isGrounded = false;
+            } else player.pos.y += player.velY;
           } else {
-            if (!g.isOnRamp) player.hasLaunchedThisRamp=false;
-            player.pos.y=ty; player.velY=0; player.isGrounded=true;
+            if (!g.isOnRamp) player.hasLaunchedThisRamp = false;
+            player.pos.y = ty; player.velY = 0; player.isGrounded = true;
           }
         } else {
-          player.velY+=sg; player.pos.y+=player.velY;
-          if (player.pos.y<=ty) { player.pos.y=ty; player.velY=0; player.isGrounded=true; player.hasLaunchedThisRamp=false; }
+          player.velY += sg; player.pos.y += player.velY;
+          if (player.pos.y <= ty) { player.pos.y=ty; player.velY=0; player.isGrounded=true; player.hasLaunchedThisRamp=false; }
         }
       } else {
         player.isGrounded=false; player.velY+=sg; player.pos.y+=player.velY; player.hasLaunchedThisRamp=false;
       }
     }
 
-    player.mesh.rotation.x+=spd*0.28;
-    player.mesh.rotation.z-=player.velX*0.28;
+    player.mesh.rotation.x += spd*0.28;
+    player.mesh.rotation.z -= player.velX*0.28;
     player.mesh.position.copy(player.pos);
-    state.score=Math.max(0,Math.floor(player.pos.z));
+    state.score = Math.max(0, Math.floor(player.pos.z));
 
-    // Camera — reuse vectors, no clone()
     _camPos.copy(player.pos).add(_camOffset);
     camera.position.lerp(_camPos, 0.18);
     _camTarget.set(player.pos.x, player.pos.y+0.2, player.pos.z+6);
     camera.lookAt(_camTarget);
-    const tFOV=(state.superJumpTimer>0||state.boostTimer>0)?78:65;
-    camera.fov+=(tFOV-camera.fov)*0.1;
+    const tFOV = (state.superJumpTimer>0||state.boostTimer>0) ? 78 : 65;
+    camera.fov += (tFOV - camera.fov)*0.1;
     camera.updateProjectionMatrix();
 
-    // Obstacle collisions + cleanup
-    obstacles=obstacles.filter(obs=>{
-      if (obs.z<player.pos.z-40) return false;
+    obstacles = obstacles.filter(obs => {
+      if (obs.z < player.pos.z-40) return false;
       const dz=Math.abs(player.pos.z-obs.z), dx=Math.abs(player.pos.x-obs.x);
       const cy=-obs.z*SLOPE_TAN+(0.5+obs.size/2)*SLOPE_COS, dy=Math.abs(player.pos.y-cy);
-      const hit=obs.size/2-0.2+player.radius;
-      if (dz<hit && dx<hit && dy<hit) triggerGameOver("CRASHED!","You hit a red hazard block.");
+      const hit = obs.size/2-0.2+player.radius;
+      if (dz<hit && dx<hit && dy<hit) triggerGameOver('CRASHED!','You hit a red hazard block.');
       return true;
     });
 
-    // Prune old track tiles
-    trackSegments=trackSegments.filter(s=>{
+    trackSegments = trackSegments.filter(s => {
       if (s.position && s.position.z < player.pos.z-50) { scene.remove(s); return false; }
       return true;
     });
-    // Prune stale ramp data
-    jumpRamps=jumpRamps.filter(r=>r.zEnd>player.pos.z-60);
+    jumpRamps = jumpRamps.filter(r => r.zEnd > player.pos.z-60);
 
     populateTrack();
 
-    if (player.pos.y < -player.pos.z*SLOPE_TAN-12 || Math.abs(player.pos.x)>TRACK_WIDTH/2+5)
-      triggerGameOver("FELL OFF!","You dropped into the void.");
+    if (player.pos.y < -player.pos.z*SLOPE_TAN-12 || Math.abs(player.pos.x) > TRACK_WIDTH/2+5)
+      triggerGameOver('FELL OFF!','You dropped into the void.');
 
-    // Throttle DOM updates to every 4 frames
     if (frameCount%4===0) updateGameUI();
   }
 
   function bindGameEvents() {
-    window.addEventListener("resize", ()=>{
+    window.addEventListener('resize', () => {
       if (!renderer) return;
       const w=window.innerWidth, h=window.innerHeight-52;
       camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h);
     });
-    window.addEventListener("keydown", e=>{
-      if (e.code==="KeyA"||e.code==="ArrowLeft")  keys.left=true;
-      if (e.code==="KeyD"||e.code==="ArrowRight") keys.right=true;
-      if (e.code==="KeyR"&&state.isGameOver) resetGame();
+    window.addEventListener('keydown', e => {
+      if (e.code==='KeyA'||e.code==='ArrowLeft')  keys.left=true;
+      if (e.code==='KeyD'||e.code==='ArrowRight') keys.right=true;
+      if (e.code==='KeyR' && state.isGameOver) resetGame();
     });
-    window.addEventListener("keyup", e=>{
-      if (e.code==="KeyA"||e.code==="ArrowLeft")  keys.left=false;
-      if (e.code==="KeyD"||e.code==="ArrowRight") keys.right=false;
+    window.addEventListener('keyup', e => {
+      if (e.code==='KeyA'||e.code==='ArrowLeft')  keys.left=false;
+      if (e.code==='KeyD'||e.code==='ArrowRight') keys.right=false;
     });
-    document.getElementById("start-btn").addEventListener("click", startGame);
-    document.getElementById("restart-btn").addEventListener("click", resetGame);
-    const bl=document.getElementById("btn-left"), br=document.getElementById("btn-right");
-    bl.addEventListener("touchstart",e=>{e.preventDefault();keys.left=true;});
-    bl.addEventListener("touchend",  e=>{e.preventDefault();keys.left=false;});
-    br.addEventListener("touchstart",e=>{e.preventDefault();keys.right=true;});
-    br.addEventListener("touchend",  e=>{e.preventDefault();keys.right=false;});
-    window.addEventListener("touchstart",e=>{
-      if(e.target.closest("button")) return; isTouching=true; touchX=e.touches[0].clientX;
+    document.getElementById('start-btn').addEventListener('click', startGame);
+    document.getElementById('restart-btn').addEventListener('click', resetGame);
+    const bl=document.getElementById('btn-left'), br=document.getElementById('btn-right');
+    bl.addEventListener('touchstart', e=>{e.preventDefault();keys.left=true;});
+    bl.addEventListener('touchend',   e=>{e.preventDefault();keys.left=false;});
+    br.addEventListener('touchstart', e=>{e.preventDefault();keys.right=true;});
+    br.addEventListener('touchend',   e=>{e.preventDefault();keys.right=false;});
+    window.addEventListener('touchstart', e=>{
+      if(e.target.closest('button')) return; isTouching=true; touchX=e.touches[0].clientX;
     });
-    window.addEventListener("touchmove",e=>{
-      if(!isTouching||e.target.closest("button")) return;
+    window.addEventListener('touchmove', e=>{
+      if(!isTouching||e.target.closest('button')) return;
       const d=e.touches[0].clientX-touchX; touchX=e.touches[0].clientX;
       if(d<-2){keys.left=true;keys.right=false;} else if(d>2){keys.right=true;keys.left=false;}
     });
-    window.addEventListener("touchend",()=>{ isTouching=false; keys.left=false; keys.right=false; });
+    window.addEventListener('touchend', ()=>{ isTouching=false; keys.left=false; keys.right=false; });
   }
 
-  function startGame() { document.getElementById("start-screen").style.display="none"; state.isRunning=true; }
+  function startGame() { document.getElementById('start-screen').style.display='none'; state.isRunning=true; }
 
   function resetGame() {
     trackSegments.forEach(s=>{ if(s.position) scene.remove(s); });
-    trackSegments=[]; obstacles=[]; jumpRamps=[]; boostPads=[]; gems=[];
-    pendingGap=false; safeSegmentsCount=4; nextSegmentZ=0; frameCount=0;
+    trackSegments=[]; obstacles=[]; jumpRamps=[]; boostPads=[];
+    gems.forEach(g=>{ if(g.mesh.parent) g.mesh.parent.remove(g.mesh); }); gems=[];
+    pendingGap=false; safeSegmentsCount=4; nextSegmentZ=0;
+    narrowRemaining=0; narrowPhase=0; frameCount=0;
+    chainMode=false; chainPhase=0; chainSegsLeft=0;
 
-    const sy=player.radius/SLOPE_COS;
+    const sy = player.radius/SLOPE_COS;
     player.pos.set(0,sy,0); player.velX=0; player.velY=0;
     player.isGrounded=true; player.hasLaunchedThisRamp=false;
     player.mesh.position.copy(player.pos);
 
-    Object.assign(state,{ speed:BASE_SPEED, score:0, gemsCollected:0, boostTimer:0, superJumpTimer:0, isGameOver:false, isRunning:true });
+    Object.assign(state, { speed:BASE_SPEED, score:0, gemsCollected:0,
+      boostTimer:0, superJumpTimer:0, isGameOver:false, isRunning:true });
+
     populateTrack();
-    document.getElementById("game-over-screen").style.display="none";
-    document.getElementById("start-screen").style.display="none";
+    document.getElementById('game-over-screen').style.display='none';
+    document.getElementById('start-screen').style.display='none';
     updateGameUI();
+  }
+
+
+  /* ─────────────────────────────────────────────────────────
+     WORLD RECORD — single doc, 2 numbers (score + gems)
+  ───────────────────────────────────────────────────────── */
+  let db = null;
+  let wrScore = 0, wrGems = 0;
+
+  async function initLeaderboard() {
+    try { db = await claude.use('db'); } catch(e) { db = null; }
+    if (!db) return;
+    // live-listen to the single world-record doc
+    db.doc('wr/best').onSnapshot(snap => {
+      const d = snap.data();
+      if (d) { wrScore = d.score || 0; wrGems = d.gems || 0; }
+      updateWRDisplay();
+    });
+  }
+
+  function updateWRDisplay() {
+    const s = document.getElementById('wr-score');
+    const g = document.getElementById('wr-gems');
+    if (s) s.textContent = wrScore > 0 ? wrScore + 'm' : '—m';
+    if (g) g.textContent = '♦' + (wrGems > 0 ? wrGems : '—');
+  }
+
+  async function maybeUpdateWR(score, gems) {
+    if (!db || score <= wrScore) return;
+    try {
+      await db.doc('wr/best').set({ score, gems });
+    } catch(e) { /* silent */ }
   }
 
   function triggerGameOver(title, desc) {
     state.isGameOver=true; state.isRunning=false;
-    if (state.score>state.highScore) {
+    if (state.score > state.highScore) {
       state.highScore=state.score;
-      localStorage.setItem("slope3d_highscore",state.highScore.toString());
+      localStorage.setItem('slope3d_highscore', state.highScore.toString());
       updateHighScoreUI();
     }
-    document.getElementById("crash-title").innerText=title;
-    document.getElementById("crash-desc").innerText=desc;
-    document.getElementById("final-score").innerText=state.score+"m";
-    document.getElementById("final-gems").innerText=state.gemsCollected;
-    document.getElementById("game-over-screen").style.display="flex";
+    document.getElementById('crash-title').innerText=title;
+    document.getElementById('crash-desc').innerText=desc;
+    document.getElementById('final-score').innerText=state.score+'m';
+    document.getElementById('final-gems').innerText=state.gemsCollected;
+    updateWRDisplay();
+    document.getElementById('game-over-screen').style.display='flex';
+    maybeUpdateWR(state.score, state.gemsCollected);
   }
 
   function updateGameUI() {
-    document.getElementById("score-text").innerText=state.score+"m";
-    document.getElementById("gems-text").innerText="♦ "+state.gemsCollected;
-    document.getElementById("speed-text").innerText=Math.round(state.speed*52)+" MPH";
+    document.getElementById('score-text').innerText=state.score+'m';
+    document.getElementById('gems-text').innerText='♦ '+state.gemsCollected;
+    document.getElementById('speed-text').innerText=Math.round(state.speed*52)+' MPH';
   }
-  function updateHighScoreUI() {
-    document.getElementById("high-score-text").innerText=state.highScore+"m";
-  }
+  function updateHighScoreUI() { document.getElementById('high-score-text').innerText=state.highScore+'m'; }
 
   function animateGame() {
     requestAnimationFrame(animateGame);
