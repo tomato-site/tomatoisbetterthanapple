@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+v<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -267,8 +267,8 @@
 
 <!-- ══ TAB NAV ══ -->
 <nav id="tab-nav">
-  <button class="tab-btn active" onclick="showTab('article')">🍅 THE CASE</button>
-  <button class="tab-btn"        onclick="showTab('game')">🎮 THE GAME</button>
+  <button class="tab-btn active" onclick="showTab('article')">stuff to do with tomato</button>
+  <button class="tab-btn"        onclick="showTab('game')">a game that has nothing to do with tomato</button>
 </nav>
 
 <!-- ══ ARTICLE PANEL ══ -->
@@ -358,11 +358,6 @@
         </div>
       </div>
       <!-- World best — centre of HUD -->
-      <div class="glass-panel hud-box" style="text-align:center; min-width:110px">
-        <div class="hud-label">🌍 WORLD</div>
-        <div style="font-family:monospace;font-weight:900;font-size:14px;color:#22d3ee"><span id="wr-score">—m</span></div>
-        <div style="font-family:monospace;font-weight:700;font-size:12px;color:#e879f9"><span id="wr-gems">♦—</span></div>
-      </div>
       <div class="glass-panel hud-box" style="min-width:130px; text-align:right">
         <div class="hud-label">Speed</div>
         <div id="speed-text" class="neon-glow-amber">45 MPH</div>
@@ -865,18 +860,22 @@
   /* ─────────────────────────────────────────────────────────
      WORLD RECORD — single doc, 2 numbers (score + gems)
   ───────────────────────────────────────────────────────── */
-  let db = null;
+
+  // ⬇️  Replace this with your Firebase Realtime Database URL.
+  // Steps: console.firebase.google.com → New project → Realtime Database
+  // → Create database (test mode) → copy the URL shown (ends in .firebaseio.com)
+  const WR_URL = 'https://YOUR-PROJECT-default-rtdb.firebaseio.com/wr.json';
+
   let wrScore = 0, wrGems = 0;
 
   async function initLeaderboard() {
-    try { db = await claude.use('db'); } catch(e) { db = null; }
-    if (!db) return;
-    // live-listen to the single world-record doc
-    db.doc('wr/best').onSnapshot(snap => {
-      const d = snap.data();
+    try {
+      const res = await fetch(WR_URL);
+      if (!res.ok) return;
+      const d = await res.json();
       if (d) { wrScore = d.score || 0; wrGems = d.gems || 0; }
       updateWRDisplay();
-    });
+    } catch(e) { /* no internet or URL not set yet — silently skip */ }
   }
 
   function updateWRDisplay() {
@@ -887,9 +886,15 @@
   }
 
   async function maybeUpdateWR(score, gems) {
-    if (!db || score <= wrScore) return;
+    if (score <= wrScore) return;
+    wrScore = score; wrGems = gems;
+    updateWRDisplay();
     try {
-      await db.doc('wr/best').set({ score, gems });
+      await fetch(WR_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ score, gems })
+      });
     } catch(e) { /* silent */ }
   }
 
