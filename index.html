@@ -540,7 +540,7 @@
     scene.add(tile);
     trackSegments.push(tile);
 
-    const bm = new THREE.MeshBasicMaterial({ color:0x00ffcc });
+    const bm = new THREE.MeshBasicMaterial({ color:0x#0000FF });
     const bGeo = new THREE.BoxGeometry(0.5,1.0,SEGMENT_LENGTH);
     const lb = new THREE.Mesh(bGeo,bm); lb.position.set(-TRACK_WIDTH/2,0.5,0); tile.add(lb);
     const rb = new THREE.Mesh(bGeo,bm); rb.position.set( TRACK_WIDTH/2,0.5,0); tile.add(rb);
